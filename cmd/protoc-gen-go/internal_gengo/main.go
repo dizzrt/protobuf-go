@@ -11,6 +11,7 @@ import (
 	"go/parser"
 	"go/token"
 	"math"
+	"regexp"
 	"strconv"
 	"strings"
 	"unicode"
@@ -757,6 +758,67 @@ func fieldDefaultValue(g *protogen.GeneratedFile, f *fileInfo, m *messageInfo, f
 
 func fieldJSONTagValue(field *protogen.Field) string {
 	return string(field.Desc.Name()) + ",omitempty"
+}
+
+func normalizeTagLine(s string) string {
+	var tagPrefixRe = regexp.MustCompile(`(?i)^\s*?tags\s*:\s*`)
+
+	s = strings.TrimSpace(s)
+	if after, ok := strings.CutPrefix(s, "//"); ok {
+		s = strings.TrimSpace(after)
+	}
+	s = strings.TrimSpace(s)
+	s = tagPrefixRe.ReplaceAllString(s, "")
+	s = strings.TrimSpace(s)
+	// 去除包裹的反引号 `...`
+	if len(s) >= 2 && s[0] == '`' && s[len(s)-1] == '`' {
+		s = s[1 : len(s)-1]
+	}
+	return s
+}
+
+func fieldIsValidCommentsTags(field *protogen.Field) bool {
+	s := field.Comments.Trailing.String()
+	s = normalizeTagLine(s)
+
+	var multiKVRe = regexp.MustCompile(
+		`^` +
+			`[A-Za-z0-9]+\s*:\s*"(?:[^"\\]|\\.)*"` + // 第一个键值对
+			`(?:\s*,\s*[A-Za-z0-9]+\s*:\s*"(?:[^"\\]|\\.)*")*` + // 后续键值对（可选）
+			`$`,
+	)
+	return multiKVRe.MatchString(s)
+}
+
+// 解析并返回 key 与去转义后的 value，若不匹配返回 ok=false
+func fieldCommentsTags(field *protogen.Field) (structTags, bool) {
+	if !fieldIsValidCommentsTags(field) {
+		return nil, false
+	}
+	s := field.Comments.Trailing.String()
+	s = normalizeTagLine(s)
+	var kvGroupRe = regexp.MustCompile(`([A-Za-z0-9]+)\s*:\s*("(?:[^"\\]|\\.)*")`)
+	matches := kvGroupRe.FindAllStringSubmatch(s, -1)
+	if matches == nil {
+		return nil, false
+	}
+	out := make(map[string]string, len(matches))
+	tags := structTags{}
+	for _, m := range matches {
+		key := m[1]
+		raw := m[2] // 带外层双引号
+		val, err := strconv.Unquote(raw)
+		if err != nil {
+			return nil, false
+		}
+		if _, exists := out[key]; exists {
+			// 重复键视为非法；如需允许则改为覆盖
+			return nil, false
+		}
+		tags = append(tags, structTags{{key, val}}...)
+		out[key] = val
+	}
+	return tags, true
 }
 
 func genExtensions(g *protogen.GeneratedFile, f *fileInfo) {
