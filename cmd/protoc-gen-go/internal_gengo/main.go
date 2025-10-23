@@ -502,6 +502,17 @@ func genMessageField(g *protogen.GeneratedFile, f *fileInfo, m *messageInfo, fie
 		tags = append(tags, gotrackTags...)
 	}
 
+	if fieldIsValidCommentsTags(field) {
+		commentsTags, mp := fieldCommentsTags(field)
+		var jsonCommentsTagsValue string
+		var hasJsonCommentsTagsValue bool
+		jsonCommentsTagsValue, hasJsonCommentsTagsValue = mp["json"]
+		if hasJsonCommentsTagsValue {
+			commentsTags = opaqueDeleteTag(commentsTags, "json")
+			opaqueReplaceTag(tags, "json", jsonCommentsTagsValue)
+		}
+		tags = append(tags, commentsTags...)
+	}
 	name := field.GoName
 	g.AnnotateSymbol(m.GoIdent.GoName+"."+name, protogen.Annotation{Location: field.Location})
 	leadingComments := appendDeprecationSuffix(field.Comments.Leading,
@@ -779,29 +790,26 @@ func normalizeTagLine(s string) string {
 
 func fieldIsValidCommentsTags(field *protogen.Field) bool {
 	s := field.Comments.Trailing.String()
-	s = normalizeTagLine(s)
-
-	var multiKVRe = regexp.MustCompile(
-		`^` +
-			`[A-Za-z0-9]+\s*:\s*"(?:[^"\\]|\\.)*"` + // 第一个键值对
-			`(?:\s*,\s*[A-Za-z0-9]+\s*:\s*"(?:[^"\\]|\\.)*")*` + // 后续键值对（可选）
-			`$`,
-	)
-	return multiKVRe.MatchString(s)
+	s = strings.TrimSpace(s)
+	if after, ok := strings.CutPrefix(s, "//"); ok {
+		s = strings.TrimSpace(after)
+	}
+	var tagPrefixRe = regexp.MustCompile(`(?i)^\s*?tags\s*:\s*`)
+	return tagPrefixRe.MatchString(s)
 }
 
-// 解析并返回 key 与去转义后的 value，若不匹配返回 ok=false
-func fieldCommentsTags(field *protogen.Field) (structTags, bool) {
-	if !fieldIsValidCommentsTags(field) {
-		return nil, false
-	}
+// 解析并返回 key 与去转义后的 value，若格式错误则抛出异常
+func fieldCommentsTags(field *protogen.Field) (structTags, map[string]string) {
+	fieldIsValidCommentsTags(field) // 先验证格式，格式错误会直接抛异常
+
 	s := field.Comments.Trailing.String()
 	s = normalizeTagLine(s)
 	var kvGroupRe = regexp.MustCompile(`([A-Za-z0-9]+)\s*:\s*("(?:[^"\\]|\\.)*")`)
 	matches := kvGroupRe.FindAllStringSubmatch(s, -1)
 	if matches == nil {
-		return nil, false
+		panic(fmt.Sprintf("字段 %s 的 tags 注释解析失败: %q", field.Desc.FullName(), s))
 	}
+
 	out := make(map[string]string, len(matches))
 	tags := structTags{}
 	for _, m := range matches {
@@ -809,16 +817,15 @@ func fieldCommentsTags(field *protogen.Field) (structTags, bool) {
 		raw := m[2] // 带外层双引号
 		val, err := strconv.Unquote(raw)
 		if err != nil {
-			return nil, false
+			panic(fmt.Sprintf("字段 %s 的 tags 注释中值 %s 反转义失败: %v", field.Desc.FullName(), raw, err))
 		}
 		if _, exists := out[key]; exists {
-			// 重复键视为非法；如需允许则改为覆盖
-			return nil, false
+			panic(fmt.Sprintf("字段 %s 的 tags 注释中存在重复的键: %s", field.Desc.FullName(), key))
 		}
 		tags = append(tags, structTags{{key, val}}...)
 		out[key] = val
 	}
-	return tags, true
+	return tags, out
 }
 
 func genExtensions(g *protogen.GeneratedFile, f *fileInfo) {
