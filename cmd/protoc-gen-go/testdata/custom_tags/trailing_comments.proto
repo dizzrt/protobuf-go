@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package goproto.protoc.custom_tags;
+option go_package = "github.com/example/protobuf-example/testdata/custom_tags;simple";
+
+message TrailingCommentsTags {
+  int32 id = 1; // tags: `k1:"v1" k2:"v2" k3:"v3,v33,v333"`
+  string name = 2; // tags: `k1:"v1" k2:"v2"`
+  string phone = 3; // tags: `k1:"v1"`
+}

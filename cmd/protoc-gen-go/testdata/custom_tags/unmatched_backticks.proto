@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+package goproto.protoc.custom_tags;
+option go_package = "github.com/example/protobuf-example/testdata/custom_tags;simple";
+
+// 测试反引号不正确匹配（缺少结束反引号），应触发错误
+message UnmatchedBackticks {
+  int32 id = 1; // tags: `k1:"v1" k2:"v2" 这里缺少结束反引号
+}

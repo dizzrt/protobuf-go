@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package goproto.protoc.custom_tags;
+option go_package = "github.com/example/protobuf-example/testdata/custom_tags;simple";
+
+// 测试值中包含空格与特殊字符，逗号左右可有空格
+message SpacesAroundSpecials {
+  int32 a = 1;   // tags: `k1:" v1 " k2:" v2 , v22 , v222 "`
+  string b = 2;  // tags: `json:"b,omitempty" k3:" v3 , v33 , v333 "`
+  string c = 3;  // tags: `k4:"(x) {y} [z]" k5:"a,b , c , d"`
+}

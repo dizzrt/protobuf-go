@@ -6,6 +6,7 @@
 package internal_gengo
 
 import (
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -502,17 +503,16 @@ func genMessageField(g *protogen.GeneratedFile, f *fileInfo, m *messageInfo, fie
 		tags = append(tags, gotrackTags...)
 	}
 
-	if fieldIsValidCommentsTags(field) {
-		commentsTags, mp := fieldCommentsTags(field)
-		var jsonCommentsTagsValue string
-		var hasJsonCommentsTagsValue bool
-		jsonCommentsTagsValue, hasJsonCommentsTagsValue = mp["json"]
-		if hasJsonCommentsTagsValue {
-			commentsTags = opaqueDeleteTag(commentsTags, "json")
-			opaqueReplaceTag(tags, "json", jsonCommentsTagsValue)
+	// 处理自定义Tags
+	commentsTags := fieldCommentsTags(field)
+	for key, value := range commentsTags {
+		if key == "json" {
+			opaqueReplaceTag(tags, "json", value)
+		} else {
+			tags = append(tags, structTags{{key, value}}...)
 		}
-		tags = append(tags, commentsTags...)
 	}
+
 	name := field.GoName
 	g.AnnotateSymbol(m.GoIdent.GoName+"."+name, protogen.Annotation{Location: field.Location})
 	leadingComments := appendDeprecationSuffix(field.Comments.Leading,
@@ -771,61 +771,161 @@ func fieldJSONTagValue(field *protogen.Field) string {
 	return string(field.Desc.Name()) + ",omitempty"
 }
 
-func normalizeTagLine(s string) string {
-	var tagPrefixRe = regexp.MustCompile(`(?i)^\s*?tags\s*:\s*`)
+// 解析键值对并验证格式
+func parseKeyValuePairs(input string) (map[string]string, error) {
+	// 使用正则表达式匹配 key:"value" 格式
+	re := regexp.MustCompile(`(\w+)\s*:\s*"([^"]*)"`)
+	matches := re.FindAllStringSubmatch(input, -1)
 
-	s = strings.TrimSpace(s)
-	if after, ok := strings.CutPrefix(s, "//"); ok {
-		s = strings.TrimSpace(after)
+	if len(matches) == 0 {
+		return nil, fmt.Errorf("未找到有效的键值对格式")
 	}
-	s = strings.TrimSpace(s)
-	s = tagPrefixRe.ReplaceAllString(s, "")
-	s = strings.TrimSpace(s)
-	// 去除包裹的反引号 `...`
-	if len(s) >= 2 && s[0] == '`' && s[len(s)-1] == '`' {
-		s = s[1 : len(s)-1]
+
+	result := make(map[string]string)
+	duplicateKeys := make([]string, 0)
+
+	for _, match := range matches {
+		if len(match) != 3 {
+			continue
+		}
+
+		key := strings.TrimSpace(match[1])
+		value := strings.TrimSpace(match[2])
+
+		// 检查key是否重复
+		if _, exists := result[key]; exists {
+			duplicateKeys = append(duplicateKeys, key)
+		}
+
+		result[key] = value
 	}
-	return s
+
+	// 检查重复key
+	if len(duplicateKeys) > 0 {
+		return result, fmt.Errorf("发现重复的键: %v", duplicateKeys)
+	}
+
+	// 检查value是否存在
+	emptyValues := make([]string, 0)
+	for key, value := range result {
+		if value == "" {
+			emptyValues = append(emptyValues, key)
+		}
+	}
+
+	if len(emptyValues) > 0 {
+		return result, fmt.Errorf("以下键的值为空: %v", emptyValues)
+	}
+
+	return result, nil
 }
 
-func fieldIsValidCommentsTags(field *protogen.Field) bool {
-	s := field.Comments.Trailing.String()
-	s = strings.TrimSpace(s)
-	if after, ok := strings.CutPrefix(s, "//"); ok {
-		s = strings.TrimSpace(after)
+func validateQuotesFormat(input string) error {
+	// 去除首尾空格
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return fmt.Errorf("输入字符串为空")
 	}
-	var tagPrefixRe = regexp.MustCompile(`(?i)^\s*?tags\s*:\s*`)
-	return tagPrefixRe.MatchString(s)
+
+	// 检查未闭合的双引号
+	if strings.Count(input, "\"")%2 != 0 {
+		return fmt.Errorf("双引号格式不匹配，可能存在未闭合的引号")
+	}
+
+	// 检查转义字符
+	if strings.Contains(input, "\\\"") {
+		return fmt.Errorf("检测到转义双引号，请使用原始格式")
+	}
+
+	// 定义键值对正则表达式模式
+	// 匹配格式：key : "value"
+	pattern := `^(\s*[a-zA-Z_][a-zA-Z0-9_]*\s*:\s*"[^"]*"\s*)+$`
+	matched, err := regexp.MatchString(pattern, input)
+	if err != nil {
+		return fmt.Errorf("正则匹配错误: %v", err)
+	}
+
+	if !matched {
+		return fmt.Errorf("字符串格式不符合要求，必须是键值对格式，如 k1:\"v1\" k2:\"v2\"")
+	}
+
+	// 进一步验证每个键值对的完整性
+	// 使用正则表达式提取所有键值对
+	kvPattern := `([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*"([^"]*)"`
+	re := regexp.MustCompile(kvPattern)
+	matches := re.FindAllStringSubmatch(input, -1)
+
+	// 验证提取的键值对数量与输入字符串匹配
+	if len(matches)*2 != strings.Count(input, "\"") {
+		return fmt.Errorf("键值对不完整，存在未配对的键或值")
+	}
+
+	// 验证没有多余的字符
+	reconstructed := ""
+	for _, match := range matches {
+		if len(match) >= 3 {
+			reconstructed += fmt.Sprintf("%s:\"%s\" ", match[1], match[2])
+		}
+	}
+	reconstructed = strings.TrimSpace(reconstructed)
+
+	// 比较重构后的字符串与原始输入（忽略空格差异）
+	if strings.ReplaceAll(input, " ", "") != strings.ReplaceAll(reconstructed, " ", "") {
+		return fmt.Errorf("存在无效字符或格式错误，只允许键值对格式")
+	}
+
+	return nil
+}
+
+// 完整的解析和验证流程
+func parseAndValidate(input string) (map[string]string, error) {
+	// 去除前后空白
+	input = strings.TrimSpace(input)
+
+	// 验证双引号格式
+	if err := validateQuotesFormat(input); err != nil {
+		return nil, err
+	}
+
+	// 解析键值对
+	return parseKeyValuePairs(input)
+}
+
+func extractTagsFromComment(comment string) (map[string]string, error) {
+	// 检查是否存在tags关键字（不区分大小写）
+	hasTags := regexp.MustCompile(`(?i)\btags\s*:`).MatchString(comment)
+	if !hasTags {
+		return nil, nil // 没有tags时返回空字符串，不报错
+	}
+
+	// 检查tags后是否有反引号格式
+	hasBackticks := regexp.MustCompile(`(?i)\btags\s*:\s*` + "`" + `.*?` + "`").MatchString(comment)
+	if !hasBackticks {
+		e := fmt.Sprintf("错误注释：\"%s\"\r", comment)
+		e += "       错误原因：tags格式不正确，必须使用反引号包裹内容\n\r"
+		e += "       正确格式：tags: `内容`"
+		return nil, errors.New(e)
+	}
+
+	// 使用捕获组来提取tags后面的内容
+	var tagExtractRe = regexp.MustCompile("(?i).*tags: *" + "`" + `(.*?)` + "`")
+
+	matches := tagExtractRe.FindStringSubmatch(comment)
+	if len(matches) >= 2 {
+		return parseAndValidate(matches[1])
+	}
+
+	return nil, nil
 }
 
 // 解析并返回 key 与去转义后的 value，若格式错误则抛出异常
-func fieldCommentsTags(field *protogen.Field) (structTags, map[string]string) {
-	fieldIsValidCommentsTags(field) // 先验证格式，格式错误会直接抛异常
-
-	s := field.Comments.Trailing.String()
-	s = normalizeTagLine(s)
-	var kvGroupRe = regexp.MustCompile(`([A-Za-z0-9]+)\s*:\s*("(?:[^"\\]|\\.)*")`)
-	matches := kvGroupRe.FindAllStringSubmatch(s, -1)
-	if matches == nil {
-		panic(fmt.Sprintf("字段 %s 的 tags 注释解析失败: %q", field.Desc.FullName(), s))
+func fieldCommentsTags(field *protogen.Field) map[string]string {
+	trailing := field.Comments.Trailing.String()
+	tags, err := extractTagsFromComment(trailing)
+	if err != nil {
+		panic(err)
 	}
-
-	out := make(map[string]string, len(matches))
-	tags := structTags{}
-	for _, m := range matches {
-		key := m[1]
-		raw := m[2] // 带外层双引号
-		val, err := strconv.Unquote(raw)
-		if err != nil {
-			panic(fmt.Sprintf("字段 %s 的 tags 注释中值 %s 反转义失败: %v", field.Desc.FullName(), raw, err))
-		}
-		if _, exists := out[key]; exists {
-			panic(fmt.Sprintf("字段 %s 的 tags 注释中存在重复的键: %s", field.Desc.FullName(), key))
-		}
-		tags = append(tags, structTags{{key, val}}...)
-		out[key] = val
-	}
-	return tags, out
+	return tags
 }
 
 func genExtensions(g *protogen.GeneratedFile, f *fileInfo) {
