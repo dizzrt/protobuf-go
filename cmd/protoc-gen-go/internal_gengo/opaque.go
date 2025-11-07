@@ -65,6 +65,29 @@ func opaqueGenMessage(g *protogen.GeneratedFile, f *fileInfo, message *messageIn
 	opaqueGenOneofWrapperTypes(g, f, message)
 }
 
+func opaqueReplaceTag(tags structTags, key string, val string) {
+	for i := range tags {
+		if tags[i][0] == key {
+			tags[i][1] = val
+			break
+		}
+	}
+}
+
+func opaqueDeleteTag(tags structTags, key string) structTags {
+	if len(tags) == 0 {
+		return tags
+	}
+	out := tags[:0]
+	for _, t := range tags {
+		if t[0] == key {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
 // opaqueGenMessageField generates a struct field.
 func opaqueGenMessageField(g *protogen.GeneratedFile, f *fileInfo, message *messageInfo, field *protogen.Field, sf *structFields) {
 	if oneof := field.Oneof; oneof != nil && !oneof.Desc.IsSynthetic() {
@@ -98,9 +121,17 @@ func opaqueGenMessageField(g *protogen.GeneratedFile, f *fileInfo, message *mess
 		tags = append(tags, structTags{{"json", jsonTagValue}}...)
 	}
 	if fieldIsValidCommentsTags(field) {
-		if commentsTags, ok := fieldCommentsTags(field); ok {
-			tags = append(tags, commentsTags...)
+		commentsTags, mp := fieldCommentsTags(field)
+
+		var jsonCommentsTagsValue string
+		var hasJsonCommentsTagsValue bool
+		jsonCommentsTagsValue, hasJsonCommentsTagsValue = mp["json"]
+		if hasJsonCommentsTagsValue {
+			commentsTags = opaqueDeleteTag(commentsTags, "json")
+			opaqueReplaceTag(tags, "json", jsonCommentsTagsValue)
 		}
+
+		tags = append(tags, commentsTags...)
 	}
 	if field.Desc.IsMap() {
 		keyTagValue := fieldProtobufTagValue(field.Message.Fields[0])
