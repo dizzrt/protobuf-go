@@ -65,6 +65,15 @@ func opaqueGenMessage(g *protogen.GeneratedFile, f *fileInfo, message *messageIn
 	opaqueGenOneofWrapperTypes(g, f, message)
 }
 
+func opaqueReplaceTag(tags structTags, key string, val string) {
+	for i := range tags {
+		if tags[i][0] == key {
+			tags[i][1] = val
+			break
+		}
+	}
+}
+
 // opaqueGenMessageField generates a struct field.
 func opaqueGenMessageField(g *protogen.GeneratedFile, f *fileInfo, message *messageInfo, field *protogen.Field, sf *structFields) {
 	if oneof := field.Oneof; oneof != nil && !oneof.Desc.IsSynthetic() {
@@ -97,6 +106,17 @@ func opaqueGenMessageField(g *protogen.GeneratedFile, f *fileInfo, message *mess
 	if !message.isOpaque() {
 		tags = append(tags, structTags{{"json", jsonTagValue}}...)
 	}
+
+	// 处理自定义Tags
+	commentsTags := fieldCommentsTags(field)
+	for key, value := range commentsTags {
+		if key == "json" {
+			opaqueReplaceTag(tags, "json", value)
+		} else {
+			tags = append(tags, structTags{{key, value}}...)
+		}
+	}
+
 	if field.Desc.IsMap() {
 		keyTagValue := fieldProtobufTagValue(field.Message.Fields[0])
 		valTagValue := fieldProtobufTagValue(field.Message.Fields[1])

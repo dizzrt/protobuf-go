@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package goproto.protoc.custom_tags;
+option go_package = "github.com/example/protobuf-example/testdata/custom_tags;simple";
+
+// 尾注释中 tags: `...` 前后均可有说明文字
+message TagsWithExtraComments {
+  int32 id = 1;   // 说明: 此字段测试 tags: `k1:"v1" k2:"v2"` 附注
+  string name = 2; // 有前后文字 tags: `json:"name,omitempty" k1:"v1"` 更多文本
+  string note = 3; // 末尾说明 tags: `k1:"v 1" k2:"v-2_2"`
+}
