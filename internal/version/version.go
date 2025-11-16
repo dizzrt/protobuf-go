@@ -54,6 +54,7 @@ const (
 	Minor      = 36
 	Patch      = 10
 	PreRelease = ""
+	Ellie      = 1
 )
 
 // String formats the version string for this module in semver format.
@@ -75,5 +76,7 @@ func String() string {
 			v += "+" + metadata
 		}
 	}
+
+	v = fmt.Sprintf("%s-ellie.%d", v, Ellie)
 	return v
 }
